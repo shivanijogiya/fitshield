@@ -21,7 +21,13 @@ from django.utils.dateparse import parse_datetime
 from meals.models import Meal
 
 
-SEED_FILE = Path(__file__).resolve().parents[4] / "seed_meals.json"
+# Try multiple locations
+_base = Path(__file__).resolve()
+SEED_FILE = _base.parents[4] / "seed_meals.json"
+if not SEED_FILE.exists():
+    SEED_FILE = _base.parents[3] / "seed_meals.json"
+if not SEED_FILE.exists():
+    SEED_FILE = Path("/app/seed_meals.json")
 
 
 class Command(BaseCommand):
