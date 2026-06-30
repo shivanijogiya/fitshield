@@ -23,6 +23,16 @@ A production-quality meal tracking system built for the Fitshield Dietfood Full-
 
 ---
 
+## Live Deployment
+
+| Service              | URL                                        |
+| -------------------- | ------------------------------------------ |
+| Frontend (Dashboard) | https://fitshield-nine.vercel.app          |
+| Backend (API base)   | https://fitshield.onrender.com             |
+| GitHub Repository    | https://github.com/shivanijogiya/fitshield |
+
+---
+
 ## Architecture
 
 ```
@@ -34,6 +44,7 @@ meal-tracker/
 │   │   ├── serializers.py   # Input validation (all rules here, never in views)
 │   │   ├── views.py         # Thin views — delegate to services
 │   │   ├── services.py      # Business logic: summary aggregation, trends, duplicate guard
+│   │   ├── quick_add.py     # AI Quick-Add bonus: Groq integration
 │   │   ├── filters.py       # django-filter FilterSet (date, tag, search)
 │   │   ├── pagination.py    # Page-number pagination (page_size=10)
 │   │   ├── middleware.py    # Request logging middleware
@@ -88,14 +99,14 @@ frontend/src/
 ### 1. Clone the repo
 
 ```bash
-git clone <your-repo-url>
-cd meal-tracker
+git clone https://github.com/shivanijogiya/fitshield.git
+cd fitshield/meal-tracker
 ```
 
 ### 2. Copy environment file
 
 ```bash
-cp backend/.env.example backend/.env
+cp .env.example .env
 ```
 
 The defaults work as-is for local Docker development. No editing required.
@@ -172,24 +183,25 @@ npm run dev
 
 ### Backend
 
-| Variable               | Purpose                         | Example                          |
-| ---------------------- | ------------------------------- | -------------------------------- |
-| `SECRET_KEY`           | Django secret key               | `django-insecure-...`            |
-| `DEBUG`                | Enable debug mode               | `False`                          |
-| `ALLOWED_HOSTS`        | Comma-separated allowed hosts   | `localhost,api.example.com`      |
-| `DATABASE_URL`         | Full Postgres URL (Neon/Render) | `postgresql://user:pass@host/db` |
-| `POSTGRES_DB`          | DB name (local Docker)          | `plate`                          |
-| `POSTGRES_USER`        | DB user (local Docker)          | `plate`                          |
-| `POSTGRES_PASSWORD`    | DB password (local Docker)      | `plate`                          |
-| `POSTGRES_HOST`        | DB host (local Docker)          | `db`                             |
-| `DAILY_GOAL_KCAL`      | Daily calorie target            | `2000`                           |
-| `CORS_ALLOWED_ORIGINS` | Comma-separated allowed origins | `https://plate.vercel.app`       |
+| Variable               | Purpose                         | Example                             |
+| ---------------------- | ------------------------------- | ----------------------------------- |
+| `SECRET_KEY`           | Django secret key               | `django-insecure-...`               |
+| `DEBUG`                | Enable debug mode               | `False`                             |
+| `ALLOWED_HOSTS`        | Comma-separated allowed hosts   | `localhost,fitshield.onrender.com`  |
+| `DATABASE_URL`         | Full Postgres URL (Neon/Render) | `postgresql://user:pass@host/db`    |
+| `POSTGRES_DB`          | DB name (local Docker)          | `plate`                             |
+| `POSTGRES_USER`        | DB user (local Docker)          | `plate`                             |
+| `POSTGRES_PASSWORD`    | DB password (local Docker)      | `plate`                             |
+| `POSTGRES_HOST`        | DB host (local Docker)          | `db`                                |
+| `DAILY_GOAL_KCAL`      | Daily calorie target            | `2000`                              |
+| `CORS_ALLOWED_ORIGINS` | Comma-separated allowed origins | `https://fitshield-nine.vercel.app` |
+| `GROQ_API_KEY`         | Groq API key for AI Quick-Add   | `gsk_...`                           |
 
 ### Frontend
 
 | Variable            | Purpose                                  | Example                          |
 | ------------------- | ---------------------------------------- | -------------------------------- |
-| `VITE_API_BASE_URL` | Backend API base URL (no trailing slash) | `https://plate-api.onrender.com` |
+| `VITE_API_BASE_URL` | Backend API base URL (no trailing slash) | `https://fitshield.onrender.com` |
 
 ---
 
@@ -302,7 +314,7 @@ Base path: `/api/`
 ```json
 {
   "count": 58,
-  "next": "http://localhost:8000/api/meals/?page=2",
+  "next": "https://fitshield.onrender.com/api/meals/?page=2",
   "previous": null,
   "results": [ ... ]
 }
@@ -384,6 +396,40 @@ Base path: `/api/`
 
 ---
 
+### POST /api/meals/quick-add/ — AI Quick-Add (Bonus)
+
+**Purpose:** Accepts free text describing one or more meals; an LLM parses it into structured entries and saves them.
+
+**Request body:**
+
+```json
+{ "text": "2 rotis, dal makhani and one lassi" }
+```
+
+**Response 201:**
+
+```json
+{
+  "created": [
+    { "id": 60, "name": "Roti", "calories": 120, "source": "ai" },
+    { "id": 61, "name": "Dal Makhani", "calories": 280, "source": "ai" },
+    { "id": 62, "name": "Lassi", "calories": 150, "source": "ai" }
+  ]
+}
+```
+
+**Errors:**
+
+| Code | Reason                                          |
+| ---- | ----------------------------------------------- |
+| 400  | `text` field missing or blank                   |
+| 422  | LLM output could not be parsed into valid meals |
+| 503  | Groq API unreachable                            |
+
+See the **AI Quick-Add (Bonus)** section below for the full prompt, model choice, and known limitations.
+
+---
+
 ## Pagination
 
 `MealPageNumberPagination` enforces `page_size = 10` server-side. Even a database with 100 000 rows returns exactly 10 per request. The client receives `count`, `next`, and `previous` to navigate pages.
@@ -425,9 +471,9 @@ agg = Meal.objects.filter(
     eaten_at__date=target_date
 ).aggregate(
     total_calories=Coalesce(Sum("calories", output_field=IntegerField()), 0),
-    total_protein=Coalesce(Sum("protein_g",  output_field=DecimalField()), 0),
-    total_carbs=  Coalesce(Sum("carbs_g",    output_field=DecimalField()), 0),
-    total_fat=    Coalesce(Sum("fat_g",      output_field=DecimalField()), 0),
+    total_protein=Coalesce(Sum("protein_g",  output_field=DecimalField()), Decimal("0")),
+    total_carbs=  Coalesce(Sum("carbs_g",    output_field=DecimalField()), Decimal("0")),
+    total_fat=    Coalesce(Sum("fat_g",      output_field=DecimalField()), Decimal("0")),
     meal_count=Count("id"),
 )
 ```
@@ -612,37 +658,63 @@ Clicking a bar in `TrendsChart` calls `handleTrendBarClick(date)`. The hook sets
 
 ### Backend — Render
 
-1. Create a new **Web Service** on Render pointing to the `backend/` folder.
-2. Set **Build command:** `pip install -r requirements.txt`
-3. Set **Start command:** `./entrypoint.sh`
-4. Add all environment variables from `.env.example`.
-5. Set `DATABASE_URL` to your Neon connection string.
+1. Created a new **Web Service** on Render pointing to the `backend/` folder.
+2. Build command: `pip install -r requirements.txt`
+3. Start command: `./entrypoint.sh`
+4. Environment variables set from `.env.example` (see table above).
+5. `DATABASE_URL` set to the Neon Postgres connection string.
 
-**Live backend URL:** `https://plate-api-xxxx.onrender.com` _(replace after deploy)_
+**Live backend URL:** `https://fitshield.onrender.com`
 
 ### Frontend — Vercel
 
-1. Import the `frontend/` folder into Vercel.
-2. Set **Build command:** `npm run build`
-3. Set **Output directory:** `dist`
-4. Set environment variable `VITE_API_BASE_URL` to your Render backend URL.
+1. Imported the `frontend/` folder into Vercel.
+2. Build command: `npm run build`
+3. Output directory: `dist`
+4. Environment variable `VITE_API_BASE_URL` set to the Render backend URL.
 
-**Live frontend URL:** `https://plate-xxxx.vercel.app` _(replace after deploy)_
+**Live frontend URL:** `https://fitshield-nine.vercel.app`
 
 ### CORS
 
-`CORS_ALLOWED_ORIGINS` on the backend must list the Vercel URL exactly (no trailing slash, no wildcard). Example:
+`CORS_ALLOWED_ORIGINS` on the backend lists the Vercel URL exactly (no trailing slash, no wildcard):
 
 ```
-CORS_ALLOWED_ORIGINS=https://plate-xxxx.vercel.app
+CORS_ALLOWED_ORIGINS=https://fitshield-nine.vercel.app
 ```
 
 ---
 
-## AI Usage
+## AI Quick-Add (Bonus)
 
-- **Claude (Anthropic):** Used to generate the initial boilerplate structure for the serializer validation methods, the SVG chart scaffold, and the CSS variable token system. All generated code was reviewed line-by-line, corrected where it made incorrect assumptions (e.g. the GIN index syntax for JSONField, the `Coalesce` output_field requirement), and refactored to match the production architecture.
-- **No AI was used for the core business logic** (gap-fill algorithm, duplicate detection, aggregation query structure) — these were written by hand.
+`POST /api/meals/quick-add/` accepts free text (e.g. `"2 rotis, dal makhani and one lassi"`), sends it to Groq, and creates one or more meals from the parsed response with `source: "ai"`.
+
+**Model:** `qwen/qwen3.6-27b` — chosen after `llama3-8b-8192`, `llama3-70b-8192`, and `llama-3.3-70b-versatile` were all deprecated by Groq during the assessment window.
+
+**Prompt (`QUICK_ADD_PROMPT` constant in `meals/quick_add.py`):**
+
+```python
+QUICK_ADD_PROMPT = """You are a nutrition data extractor. The user will describe what they ate in plain text.
+
+Extract each food item and return ONLY a valid JSON array. No markdown, no explanation, no backticks, no thinking.
+
+Each object in the array must have exactly these fields:
+- "name": string (food name, max 100 chars)
+- "calories": integer (estimated kcal, 1-5000)
+- "protein_g": number (grams, 0 or more)
+- "carbs_g": number (grams, 0 or more)
+- "fat_g": number (grams, 0 or more)
+- "tags": array of strings, only from: ["vegetarian","non-vegetarian","vegan","high-protein","low-carb","snack"]
+
+Example output for "2 eggs and toast":
+[{"name":"Boiled Eggs","calories":140,"protein_g":12,"carbs_g":1,"fat_g":10,"tags":["non-vegetarian","high-protein"]},{"name":"Toast","calories":80,"protein_g":3,"carbs_g":15,"fat_g":1,"tags":["vegetarian"]}]
+
+Return ONLY the JSON array, nothing else."""
+```
+
+**Parsing strategy:** the raw model response is stripped of markdown code fences, then a regex (`re.search(r'\[.*\]', raw, re.DOTALL)`) extracts the JSON array regardless of any surrounding text. This handles cases where the model adds commentary before or after the array despite the prompt instructing it not to.
+
+**Known limitation:** despite the explicit "no thinking" instruction, the model occasionally still prepends reasoning text before the JSON array. The regex extraction fallback resolves most of these cases, but full reliability across every possible input phrasing has not been verified in the time available — see "What I Didn't Finish" below.
 
 ---
 
@@ -689,7 +761,7 @@ CORS_ALLOWED_ORIGINS=https://plate-xxxx.vercel.app
 - **Rate limiting:** `django-ratelimit` or a reverse-proxy rule to prevent API abuse.
 - **Background jobs:** Celery + Redis for async tasks (e.g. daily nutrition report emails).
 - **Testing:** pytest-django unit tests for every service function; Playwright E2E tests for the frontend.
-- **CI/CD:** GitHub Actions pipeline (lint → test → build → deploy to Render/Vercel). Render and Vercel auto-deploy on push to `main`, which covers continuous deployment. A proper CI/CD pipeline (GitHub Actions running lint + tests before allowing deploy) is still missing — currently nothing blocks a broken commit from reaching production.
+- **CI/CD:** Render and Vercel auto-deploy on push to `main`, which covers continuous deployment. A proper CI/CD pipeline (GitHub Actions running lint + tests before allowing deploy) is still missing — currently nothing blocks a broken commit from reaching production.
 - **Nutritional database integration:** Auto-populate macros from a food database (Open Food Facts API) when creating a meal by name.
 
 ---
